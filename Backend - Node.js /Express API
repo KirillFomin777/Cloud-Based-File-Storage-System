@@ -1,0 +1,71 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const fs = require('fs');
+const multer = require('multer');
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+mongoose.connect('mongodb://localhost/cloudstorage', { useNewUrlParser: true, useUnifiedTopology: true });
+
+// User schema and model
+const UserSchema = new mongoose.Schema({
+    username: String,
+    password: String
+});
+
+UserSchema.pre('save', async function(next) {
+    const user = this;
+    if (!user.isModified('password')) return next();
+    const hash = await bcrypt.hash(user.password, 10);
+    user.password = hash;
+    next();
+});
+
+const User = mongoose.model('User', UserSchema);
+
+// JWT authentication
+const auth = (req, res, next) => {
+    const token = req.header('Authorization').replace('Bearer ', '');
+    jwt.verify(token, 'secretkey', (err, decoded) => {
+        if (err) return res.status(401).send({ error: 'Authentication failed' });
+        req.userId = decoded.id;
+        next();
+    });
+};
+
+// File upload and storage
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'uploads/'),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+});
+const upload = multer({ storage });
+
+// User registration
+app.post('/register', async (req, res) => {
+    const { username, password } = req.body;
+    const user = new User({ username, password });
+    await user.save();
+    const token = jwt.sign({ id: user._id }, 'secretkey');
+    res.json({ token });
+});
+
+// File upload route
+app.post('/upload', auth, upload.single('file'), (req, res) => {
+    res.json({ message: 'File uploaded successfully', file: req.file });
+});
+
+// File download route
+app.get('/files/:filename', auth, (req, res) => {
+    const filepath = `uploads/${req.params.filename}`;
+    res.download(filepath);
+});
+
+app.listen(3000, () => {
+    console.log('Server running on port 3000');
+});
